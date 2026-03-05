@@ -26,6 +26,7 @@ const {
   Partials,
   REST,
   Routes,
+  ChannelType,
   PermissionFlagsBits,
   ButtonStyle,
   ModalBuilder,
@@ -95,15 +96,16 @@ if (!BOT_TOKEN || !GUILD_ID || !STAFF_ROLE_ID || !FIND_A_TUTOR_CHANNEL_ID || !TU
   process.exit(1);
 }
 
-// --- CreateAd categorisation (posts to find-a-tutor AND a category channel) ---
-// Categories are fixed (not env-driven) per user request.
-const CREATEAD_LEVEL_CHANNELS = {
-  university: '1458552573999972586',
-  a_level: '1458552889130614814',
-  igcse: '1458552485433311323',
-  below_igcse: '1458552366508019956',
-  language: '1464287197560701162',
-  other: '1458552927454105832'
+// --- CreateAd categorisation (posts to find-a-tutor AND a subject channel) ---
+// Dynamic discovery: channels are found at runtime by category name + subject prefix.
+const CREATEAD_LEVEL_CONFIG = {
+  igcse:       { categoryName: 'IGCSE Tutors',       prefix: 'ig-' },
+  // 'asl-al-' is the server-defined prefix for A-Level subject channels (e.g. asl-al-maths)
+  a_level:     { categoryName: 'A Level Tutors',     prefix: 'asl-al-' },
+  below_igcse: { categoryName: 'Below IGCSE Tutors', prefix: '' },
+  university:  { categoryName: 'Other Tutors',       prefix: '' },
+  language:    { categoryName: 'Other Tutors',       prefix: '' },
+  other:       { categoryName: 'Other Tutors',       prefix: '' },
 };
 const CREATEAD_LEVEL_LABELS = {
   university: 'University',
@@ -150,13 +152,52 @@ function clampLabel(s, max = 45) {
 function normalizeCreateAdLevelKey(raw) {
   const v = String(raw || '').trim().toLowerCase();
   if (!v) return null;
-  if (CREATEAD_LEVEL_CHANNELS[v]) return v;
+  if (CREATEAD_LEVEL_CONFIG[v]) return v;
   // allow some common aliases
   if (v === 'university' || v === 'uni') return 'university';
   if (v === 'a level' || v === 'alevel' || v === 'a-level') return 'a_level';
   if (v === 'below igcse' || v === 'below_igcse' || v === 'below-igcse') return 'below_igcse';
   if (v === 'language' || v === 'lang') return 'language';
   return null;
+}
+
+/**
+ * Dynamically discovers a subject channel within the correct category for a given level.
+ * If a matching channel is found, grants ViewChannel to @everyone to make it public.
+ * Returns the channel object, or null if not found.
+ */
+async function findSubjectChannel(guild, levelKey, subjectName) {
+  const config = CREATEAD_LEVEL_CONFIG[levelKey] || CREATEAD_LEVEL_CONFIG.other;
+
+  // Locate the parent category by exact name match (case-insensitive)
+  const category = guild.channels.cache.find(
+    c => c.type === ChannelType.GuildCategory &&
+         c.name.toLowerCase() === config.categoryName.toLowerCase()
+  );
+  if (!category) return null;
+
+  // Normalise subject name: strip known level prefixes, lowercase, spaces → hyphens
+  const bare = subjectName
+    .replace(/^(igcse|a\s+level|a-level|below\s+igcse|below_igcse|university|language)\s+/i, '')
+    .toLowerCase()
+    .replace(/\s+/g, '-');
+
+  const targetName = (config.prefix + bare).toLowerCase();
+
+  // Find text channel inside the category whose name matches
+  const channel = guild.channels.cache.find(
+    c => c.parentId === category.id && c.name.toLowerCase() === targetName
+  );
+  if (!channel) return null;
+
+  // Make the channel public by granting ViewChannel to @everyone
+  try {
+    await channel.permissionOverwrites.edit(guild.roles.everyone, { ViewChannel: true });
+  } catch (e) {
+    console.warn('findSubjectChannel: failed to update permissions', e);
+  }
+
+  return channel;
 }
 
 // Try to fetch a user but fail fast (timeout) to avoid interaction timeouts
@@ -1704,11 +1745,11 @@ client.on('interactionCreate', async (interaction) => {
                 return null; 
             });
             
-            // Also post to the selected category channel
+            // Also post to the discovered subject channel within the matching category
             let categorySent = null;
+            let categoryCh = null;
             try {
-                const categoryChannelId = CREATEAD_LEVEL_CHANNELS[levelKey] || CREATEAD_LEVEL_CHANNELS.other;
-                const categoryCh = await interaction.guild.channels.fetch(categoryChannelId).catch(() => null);
+                categoryCh = await findSubjectChannel(interaction.guild, levelKey, subject);
                 if (categoryCh) {
                     categorySent = await categoryCh.send({ content: messageContent, embeds: [embed], components: [row] }).catch(() => null);
                 }
@@ -1724,7 +1765,7 @@ client.on('interactionCreate', async (interaction) => {
                     embed: { title: subject, description: message, color: colorVal || db.defaultEmbedColor },
                     tutorId: selectedTutorId,
                     level: levelKey,
-                    categoryChannelId: CREATEAD_LEVEL_CHANNELS[levelKey] || CREATEAD_LEVEL_CHANNELS.other,
+                    categoryChannelId: categoryCh ? categoryCh.id : null,
                     categoryMessageId: categorySent ? categorySent.id : null,
                     fullDetails: fullDetailsMessage
                 };
@@ -1829,15 +1870,6 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         // Get both channels
-        const CREATEAD_LEVEL_CHANNELS = {
-          university: '1458552573999972586',
-          a_level: '1458552889130614814',
-          igcse: '1458552485433311323',
-          below_igcse: '1458552366508019956',
-          language: '1464287197560701162',
-          other: '1458552927454105832'
-        };
-        
         const findChannel = await interaction.guild.channels.fetch(FIND_A_TUTOR_CHANNEL_ID).catch(() => null);
         let categoryChannel = null;
         if (adData && adData.categoryChannelId) {
@@ -3264,33 +3296,25 @@ if (cmd === 'createad') {
           }
         }
         
-        // If not found in find channel, search all category channels
+        // If not found in find channel, search category channels using stored ad data
         if (!msg) {
-          const CREATEAD_LEVEL_CHANNELS = {
-            university: '1458552573999972586',
-            a_level: '1458552889130614814',
-            igcse: '1458552485433311323',
-            below_igcse: '1458552366508019956',
-            language: '1464287197560701162',
-            other: '1458552927454105832'
-          };
-          
-          for (const [levelKey, channelId] of Object.entries(CREATEAD_LEVEL_CHANNELS)) {
-            const categoryCh = await interaction.guild.channels.fetch(channelId).catch(() => null);
+          // Find the ad entry whose categoryMessageId matches the provided messageId
+          let matchedAdData = null;
+          for (const [msgId, data] of Object.entries(db.createAds || {})) {
+            if (data.categoryMessageId === messageId) {
+              matchedAdData = data;
+              break;
+            }
+          }
+
+          if (matchedAdData && matchedAdData.categoryChannelId) {
+            const categoryCh = await interaction.guild.channels.fetch(matchedAdData.categoryChannelId).catch(() => null);
             if (categoryCh) {
               const categoryMsg = await categoryCh.messages.fetch(messageId).catch(() => null);
               if (categoryMsg) {
                 msg = categoryMsg;
                 foundInCategoryChannel = true;
-                
-                // Find the ad data by categoryMessageId
-                for (const [msgId, data] of Object.entries(db.createAds || {})) {
-                  if (data.categoryMessageId === messageId) {
-                    adData = data;
-                    break;
-                  }
-                }
-                break;
+                adData = matchedAdData;
               }
             }
           }
