@@ -45,10 +45,10 @@ const RATE_LIMIT_DELAY_MS = 1000;
 // --- CreateAd level configuration (mirrors CREATEAD_LEVEL_CONFIG in index.js) ---
 const CREATEAD_LEVEL_CONFIG = {
   igcse:       { categoryName: 'IGCSE Tutors',       prefix: 'ig-' },
-  a_level:     { categoryName: 'A Level Tutors',     prefix: 'asl-al-' },
+  a_level:     { categoryName: 'AS/A Level Tutors',  prefix: 'asl-al-' },
   below_igcse: { categoryName: 'Below IGCSE Tutors', prefix: '' },
-  university:  { categoryName: 'Other Tutors',       prefix: '' },
-  language:    { categoryName: 'Other Tutors',       prefix: '' },
+  university:  { categoryName: 'University Tutors',  prefix: '' },
+  language:    { categoryName: 'Language Tutors',    prefix: '' },
   other:       { categoryName: 'Other Tutors',       prefix: '' },
 };
 
@@ -76,10 +76,15 @@ async function findSubjectChannel(guild, levelKey, subjectName) {
     c => c.type === ChannelType.GuildCategory &&
          c.name.toLowerCase() === config.categoryName.toLowerCase()
   );
-  if (!category) return null;
+  if (!category) {
+    if (process.env.DEBUG_MIGRATEADS) console.debug(`[migrateads] category not found: "${config.categoryName}" for level="${levelKey}"`);
+    return null;
+  }
 
+  // Normalise subject name: strip known level prefixes (including slash variants),
+  // lowercase, spaces → hyphens
   const bare = subjectName
-    .replace(/^(igcse|a\s+level|a-level|below\s+igcse|below_igcse|university|language)\s+/i, '')
+    .replace(/^(igcse\/gcse|igcse\/o-level|igcse|as\/al|as\/a\s+level|a\s+level|a-level|below\s+igcse|below_igcse|university|language)\s+/i, '')
     .toLowerCase()
     .replace(/\s+/g, '-');
 
@@ -88,7 +93,10 @@ async function findSubjectChannel(guild, levelKey, subjectName) {
   const channel = guild.channels.cache.find(
     c => c.parentId === category.id && c.name.toLowerCase() === targetName
   );
-  if (!channel) return null;
+  if (!channel) {
+    if (process.env.DEBUG_MIGRATEADS) console.debug(`[migrateads] channel not found: "${targetName}" in category "${config.categoryName}"`);
+    return null;
+  }
 
   try {
     await channel.permissionOverwrites.edit(guild.roles.everyone, { ViewChannel: true });

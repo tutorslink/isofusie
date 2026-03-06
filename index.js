@@ -101,14 +101,11 @@ if (!BOT_TOKEN || !GUILD_ID || !STAFF_ROLE_ID || !FIND_A_TUTOR_CHANNEL_ID || !TU
 const CREATEAD_LEVEL_CONFIG = {
   igcse:       { categoryName: 'IGCSE Tutors',       prefix: 'ig-' },
   // 'asl-al-' is the server-defined prefix for A-Level subject channels (e.g. asl-al-maths)
-  a_level:     { categoryName: 'A Level Tutors',     prefix: 'asl-al-' },
+  a_level:     { categoryName: 'AS/A Level Tutors',  prefix: 'asl-al-' },
   below_igcse: { categoryName: 'Below IGCSE Tutors', prefix: '' },
-  university:  { categoryName: 'Other Tutors',       prefix: '' },
-  language:    { categoryName: 'Other Tutors',       prefix: '' },
+  university:  { categoryName: 'University Tutors',  prefix: '' },
+  language:    { categoryName: 'Language Tutors',    prefix: '' },
   other:       { categoryName: 'Other Tutors',       prefix: '' },
-    a_level: { categoryName: 'AS/A Level Tutors' },
-    university: { categoryName: 'University Tutors' },
-    language: { categoryName: 'Language Tutors' }
 };
 const CREATEAD_LEVEL_LABELS = {
   university: 'University',
@@ -177,11 +174,15 @@ async function findSubjectChannel(guild, levelKey, subjectName) {
     c => c.type === ChannelType.GuildCategory &&
          c.name.toLowerCase() === config.categoryName.toLowerCase()
   );
-  if (!category) return null;
+  if (!category) {
+    if (process.env.DEBUG_MIGRATEADS) console.debug(`[migrateads] category not found: "${config.categoryName}" for level="${levelKey}"`);
+    return null;
+  }
 
-  // Normalise subject name: strip known level prefixes, lowercase, spaces → hyphens
+  // Normalise subject name: strip known level prefixes (including slash variants),
+  // lowercase, spaces → hyphens
   const bare = subjectName
-    .replace(/^(igcse|a\s+level|a-level|below\s+igcse|below_igcse|university|language)\s+/i, '')
+    .replace(/^(igcse\/gcse|igcse\/o-level|igcse|as\/al|as\/a\s+level|a\s+level|a-level|below\s+igcse|below_igcse|university|language)\s+/i, '')
     .toLowerCase()
     .replace(/\s+/g, '-');
 
@@ -191,7 +192,10 @@ async function findSubjectChannel(guild, levelKey, subjectName) {
   const channel = guild.channels.cache.find(
     c => c.parentId === category.id && c.name.toLowerCase() === targetName
   );
-  if (!channel) return null;
+  if (!channel) {
+    if (process.env.DEBUG_MIGRATEADS) console.debug(`[migrateads] channel not found: "${targetName}" in category "${config.categoryName}"`);
+    return null;
+  }
 
   // Make the channel public by granting ViewChannel to @everyone
   try {
@@ -3567,7 +3571,11 @@ if (cmd === 'createad') {
             if (!subject) { skipped++; continue; }
 
             const categoryCh = await findSubjectChannel(interaction.guild, levelKey, subject).catch(() => null);
-            if (!categoryCh) { skipped++; continue; }
+            if (!categoryCh) {
+              if (process.env.DEBUG_MIGRATEADS) console.debug(`[migrateads] skip ${messageId}: no channel for subject="${subject}" level="${levelKey}"`);
+              skipped++;
+              continue;
+            }
 
             const shortContent = [
               `**${subject}**`,
