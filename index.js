@@ -93,10 +93,21 @@ const {
   SYNC_WEBHOOK_URL
 } = process.env;
 
-if (!BOT_TOKEN || !GUILD_ID || !STAFF_ROLE_ID || !FIND_A_TUTOR_CHANNEL_ID || !TUTORS_FEED_CHANNEL_ID) {
-  console.error('Missing required env vars.');
-  process.exit(1);
+for (const [name, val] of [
+  ['BOT_TOKEN', BOT_TOKEN],
+  ['GUILD_ID', GUILD_ID],
+  ['STAFF_ROLE_ID', STAFF_ROLE_ID],
+  ['FIND_A_TUTOR_CHANNEL_ID', FIND_A_TUTOR_CHANNEL_ID],
+  ['TUTORS_FEED_CHANNEL_ID', TUTORS_FEED_CHANNEL_ID],
+]) {
+  if (!val) {
+    console.error(`Missing required environment variable: ${name}. Set it in Wispbyte (or your host's env var panel) and restart.`);
+    process.exit(1);
+  }
 }
+
+// Normalize comma-separated STAFF_ROLE_ID once at startup
+const STAFF_ROLE_IDS = STAFF_ROLE_ID.split(',').map(s => s.trim()).filter(Boolean);
 
 // --- CreateAd categorisation (posts to find-a-tutor AND a subject channel) ---
 // Dynamic discovery: channels are found at runtime by category name + subject prefix.
@@ -655,7 +666,7 @@ function generateTicketNumber() {
 }
 
 function getStaffRoleIds() {
-  return (STAFF_ROLE_ID || '').split(',').map(s => s.trim()).filter(Boolean);
+  return STAFF_ROLE_IDS;
 }
 
 function isStaff(member) {
@@ -1073,9 +1084,21 @@ async function registerCommands() {
 }
 
 client.once('ready', async () => {
-  console.log(`Ready as ${client.user.tag}`);
+  console.log(`Logged in as ${client.user.tag}`);
   await registerCommands();
   try { client.user.setActivity('DM for ModMail', { type: 3 }); } catch (e) {}
+
+  // Confirm whether the bot is in the configured guild
+  try {
+    const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+    if (guild) {
+      console.log(`Bot is in guild: ${guild.name} (${guild.id})`);
+    } else {
+      console.warn(`Bot is NOT in the configured guild (GUILD_ID=${GUILD_ID}). Re-invite the bot using the OAuth2 URL from the Discord Developer Portal.`);
+    }
+  } catch (e) {
+    console.warn('Could not verify guild membership:', e.message);
+  }
 });
 
 // process handlers
