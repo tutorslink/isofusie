@@ -93,8 +93,19 @@ const {
   SYNC_WEBHOOK_URL
 } = process.env;
 
-if (!BOT_TOKEN || !GUILD_ID || !STAFF_ROLE_ID || !FIND_A_TUTOR_CHANNEL_ID || !TUTORS_FEED_CHANNEL_ID) {
-  console.error('Missing required env vars.');
+const REQUIRED_ENV_VARS = {
+  BOT_TOKEN,
+  GUILD_ID,
+  STAFF_ROLE_ID,
+  FIND_A_TUTOR_CHANNEL_ID,
+  TUTORS_FEED_CHANNEL_ID,
+};
+const missingVars = Object.entries(REQUIRED_ENV_VARS)
+  .filter(([, v]) => !v)
+  .map(([k]) => k);
+if (missingVars.length > 0) {
+  console.error(`Missing required environment variable(s): ${missingVars.join(', ')}`);
+  console.error('Set these in your hosting provider\'s environment variables panel (not in the startup command).');
   process.exit(1);
 }
 
@@ -1074,6 +1085,15 @@ async function registerCommands() {
 
 client.once('ready', async () => {
   console.log(`Ready as ${client.user.tag}`);
+
+  // Guild presence check — helps confirm the bot is still in the server
+  try {
+    const guild = await client.guilds.fetch(GUILD_ID);
+    console.log(`Bot is in guild: ${guild.name} (${guild.id})`);
+  } catch (e) {
+    console.warn(`Bot is NOT in guild (or lacks access): ${GUILD_ID} — re-invite via Discord Developer Portal OAuth2 URL`);
+  }
+
   await registerCommands();
   try { client.user.setActivity('DM for ModMail', { type: 3 }); } catch (e) {}
 });
