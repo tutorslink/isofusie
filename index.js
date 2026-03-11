@@ -779,6 +779,8 @@ try {
 
 // In-memory map: tutorThreadId -> error Message object (one error message at a time per thread)
 const threadErrorMessages = new Map();
+// How long (ms) the internal-note acknowledgment stays before auto-deleting
+const INTERNAL_NOTE_ACK_TIMEOUT_MS = 10000;
 
 // centralised sticky repost helper, given a channel object, with a short lock to prevent duplicate reposts
 const _stickyLocks = new Set();
@@ -830,8 +832,8 @@ async function postToTutorsFeed(guild, ticketCode, subject, firstMessage, ticket
     ticket.tutorThreadId = thread.id;
     await thread.send(
       `📌 **How to reply to the student in this thread:**\n` +
-      `• Start your message with \`=\` to send it to the student (e.g. \`=Hi, I can help!\`). The \`=\` prefix will be stripped before delivery.\n` +
-      `• Messages **without** a leading \`=\` will **not** be forwarded to the student.`
+      `• Messages you send here are **automatically forwarded** to the student.\n` +
+      `• Prefix a message with \`=\` to keep it as an **internal note** (e.g. \`=only tutors see this\`) — it will **not** be sent to the student.`
     ).catch(() => {});
   }
   ticket.tutorMessageId = tutorsMessage.id;
@@ -4456,9 +4458,10 @@ client.on('messageCreate', async (message) => {
               prevErr.delete().catch(() => {});
             }
 
-            if (message.content && message.content.startsWith('=')) {
-              // Forward to student: strip leading '=' and optional single space
-              const text = message.content.slice(1).replace(/^ /, '');
+            const msgContent = message.content || '';
+            if (!msgContent.startsWith('=')) {
+              // Normal message (no = prefix) — forward to student
+              const text = msgContent;
               const files = [...message.attachments.values()].map(a => a.url);
               // Skip forwarding if there is nothing to send (no text and no attachments)
               if (!text && !files.length) return;
@@ -4482,26 +4485,26 @@ client.on('messageCreate', async (message) => {
                   saveDB();
                 }
               } catch (e) {
-                console.warn('Failed to forward = prefixed tutor message to student', e);
+                console.warn('Failed to forward tutor message to student', e);
                 try { notifyStaffError(e, 'messageCreate bridge forward to student', message); } catch (err) {}
               }
             } else {
-              // No '=' prefix — post a single error message in the thread (auto-delete after 10 s)
+              // = prefix — internal note, post a brief auto-deleting acknowledgment
               try {
-                const errMsg = await message.channel.send(
-                  `⚠️ Your message was **not** sent to the student. Start your message with \`=\` to forward it (e.g. \`=Hello!\`).`
+                const noteMsg = await message.channel.send(
+                  `🔒 Internal note — this message was **not** sent to the student.`
                 ).catch(() => null);
-                if (errMsg) {
-                  threadErrorMessages.set(threadId, errMsg);
+                if (noteMsg) {
+                  threadErrorMessages.set(threadId, noteMsg);
                   setTimeout(() => {
-                    if (threadErrorMessages.get(threadId) === errMsg) {
+                    if (threadErrorMessages.get(threadId) === noteMsg) {
                       threadErrorMessages.delete(threadId);
-                      errMsg.delete().catch(() => {});
+                      noteMsg.delete().catch(() => {});
                     }
-                  }, 10000);
+                  }, INTERNAL_NOTE_ACK_TIMEOUT_MS);
                 }
               } catch (e) {
-                console.warn('Failed to post = prefix error message in tutor thread', e);
+                console.warn('Failed to post internal-note acknowledgment in tutor thread', e);
               }
             }
           }
