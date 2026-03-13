@@ -1002,6 +1002,14 @@ async function registerCommands() {
       default_member_permissions: PermissionFlagsBits.ManageMessages.toString()
     },
     {
+      name: 'tutoredit',
+      description: "Edit a tutor's phone number or date of birth",
+      options: [
+        { name: 'user', description: 'The tutor to edit (leave blank to select from a list)', type: 6, required: false }
+      ],
+      default_member_permissions: PermissionFlagsBits.ManageMessages.toString()
+    },
+    {
       name: 'createad',
       description: 'Create an ad in #find-a-tutor, modal supports optional color and tutor assignment',
       default_member_permissions: PermissionFlagsBits.ManageMessages.toString()
@@ -2291,6 +2299,36 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: `Notes updated for tutor ${userid}.`, ephemeral: true }).catch(() => {});
       }
 
+      // tutor_add_info_modal|USERID -> staff completing tutor add, setting optional phone/DOB
+      if (interaction.customId && interaction.customId.startsWith('tutor_add_info_modal|')) {
+        const userid = interaction.customId.split('|')[1];
+        const phone = interaction.fields.getTextInputValue('phone') || '';
+        const dob = interaction.fields.getTextInputValue('dob') || '';
+
+        db.tutorProfiles[userid] = db.tutorProfiles[userid] || { addedAt: Date.now(), students: [], reviews: [], rating: { count: 0, avg: 0 }, notes: '' };
+        if (phone) db.tutorProfiles[userid].phoneNumber = phone;
+        if (dob) db.tutorProfiles[userid].dob = dob;
+        saveDB();
+
+        const infoSaved = (phone || dob) ? ` Phone/DOB saved.` : '';
+        return interaction.reply({ content: `Tutor <@${userid}> added successfully.${infoSaved}` }).catch(() => {});
+      }
+
+      // tutor_edit_modal|USERID -> staff editing phone/DOB for an existing tutor
+      if (interaction.customId && interaction.customId.startsWith('tutor_edit_modal|')) {
+        if (!isStaff(interaction.member)) return interaction.reply({ content: 'Only staff can edit tutor info.', ephemeral: true }).catch(() => {});
+        const userid = interaction.customId.split('|')[1];
+        const phone = interaction.fields.getTextInputValue('phone') || '';
+        const dob = interaction.fields.getTextInputValue('dob') || '';
+
+        db.tutorProfiles[userid] = db.tutorProfiles[userid] || { addedAt: Date.now(), students: [], reviews: [], rating: { count: 0, avg: 0 }, notes: '' };
+        db.tutorProfiles[userid].phoneNumber = phone;
+        db.tutorProfiles[userid].dob = dob;
+        saveDB();
+
+        return interaction.reply({ content: `Updated contact info for tutor <@${userid}>.`, ephemeral: true }).catch(() => {});
+      }
+
       // close_ticket_modal|CODE -> staff provided reason, plus fields were stored temporarily on ticket._closeFlowTemp
       if (interaction.customId && interaction.customId.startsWith('close_ticket_modal|')) {
         console.log(`[CLOSE MODAL SUBMIT] Handler reached! customId: ${interaction.customId}`);
@@ -2624,6 +2662,8 @@ client.on('interactionCreate', async (interaction) => {
           const rating = profile.rating && profile.rating.count ? `${(Number(profile.rating.avg) || 0).toFixed(2)} ⭐️ (${profile.rating.count})` : '(no ratings)';
           const studentList = (profile.students && profile.students.length) ? profile.students.join(', ') : '(none)';
           const notes = profile.notes || '(no notes)';
+          const phone = profile.phoneNumber || '(not set)';
+          const dob = profile.dob || '(not set)';
           const lines = [
             `Tutor info for: ${userTag} (${userid})`,
             `Ad code(s): ${adCodesList.length ? adCodesList.join(', ') : '(none)'}`,
@@ -2632,6 +2672,8 @@ client.on('interactionCreate', async (interaction) => {
             `Subjects: ${subjects.length ? subjects.join(', ') : '(none)'}`,
             `Assigned students: ${studentList}`,
             `Rating: ${rating}`,
+            `Phone: ${phone}`,
+            `DOB: ${dob}`,
             `Notes: ${notes}`
           ];
           try {
@@ -2659,6 +2701,35 @@ client.on('interactionCreate', async (interaction) => {
             .setMaxLength(4000);
           modal.addComponents(new ActionRowBuilder().addComponents(notesInput));
           try { await interaction.showModal(modal); } catch (err) { try { notifyStaffError(err, 'tutor_select showModal notes', interaction); } catch (e) {} return interaction.reply({ content: 'Could not open notes modal, try again.', ephemeral: true }); }
+          return;
+        }
+
+        if (subAction === 'edit') {
+          const userid = String(selected);
+          db.tutorProfiles[userid] = db.tutorProfiles[userid] || { addedAt: Date.now(), students: [], reviews: [], rating: { count: 0, avg: 0 }, notes: '' };
+          const profile = db.tutorProfiles[userid];
+          const modal = new ModalBuilder()
+            .setCustomId(`tutor_edit_modal|${userid}`)
+            .setTitle('Edit Tutor Contact Info');
+          const phoneInput = new TextInputBuilder()
+            .setCustomId('phone')
+            .setLabel('Phone Number')
+            .setStyle(TextInputStyle.Short)
+            .setRequired(false)
+            .setValue((profile.phoneNumber || '').substring(0, 100))
+            .setPlaceholder('e.g. +1 234 567 890');
+          const dobInput = new TextInputBuilder()
+            .setCustomId('dob')
+            .setLabel('Date of Birth')
+            .setStyle(TextInputStyle.Short)
+            .setRequired(false)
+            .setValue((profile.dob || '').substring(0, 100))
+            .setPlaceholder('e.g. YYYY-MM-DD');
+          modal.addComponents(
+            new ActionRowBuilder().addComponents(phoneInput),
+            new ActionRowBuilder().addComponents(dobInput)
+          );
+          try { await interaction.showModal(modal); } catch (err) { try { notifyStaffError(err, 'tutor_select showModal edit', interaction); } catch (e) {} return interaction.reply({ content: 'Could not open edit modal, try again.', ephemeral: true }).catch(() => {}); }
           return;
         }
 
@@ -2701,25 +2772,26 @@ client.on('interactionCreate', async (interaction) => {
             db.subjectTutors[subj] = db.subjectTutors[subj] || [];
             if (!db.subjectTutors[subj].includes(userid)) db.subjectTutors[subj].push(userid);
             db.tutorProfiles[userid] = db.tutorProfiles[userid] || { addedAt: Date.now(), students: [], reviews: [], rating: { count:0, avg:0 }, notes: '' };
-            saveDB();
-            // Acknowledge interaction immediately to prevent expiration
-            try {
-              await interaction.deferUpdate();
-            } catch (e) {
-              try {
-                await interaction.update({ content: `Processing...`, components: [] });
-              } catch (err) {
-                return;
-              }
-            }
-            try { await grantTutorAccess(userid); } catch (e) { try { notifyStaffError(e, 'tutor_add_select grantTutorAccess', interaction); } catch (err) {} }
             delete db._tempTutorAdd[key];
-            const tutorUser = await client.users.fetch(userid).catch(() => null);
-            const tutorDisplay = tutorUser ? `**${tutorUser.username}** (<@${userid}>)` : `<@${userid}>`;
+            saveDB();
+            // Start grantTutorAccess in background before showing modal
+            (async () => { try { await grantTutorAccess(userid); } catch (e) { try { notifyStaffError(e, 'tutor_add_select grantTutorAccess', interaction); } catch (err) {} } })();
+            // Show phone/DOB modal as the response
+            const profile = db.tutorProfiles[userid];
+            const modal = new ModalBuilder()
+              .setCustomId(`tutor_add_info_modal|${userid}`)
+              .setTitle('New Tutor — Contact Info (Optional)');
+            const phoneInput = new TextInputBuilder()
+              .setCustomId('phone').setLabel('Phone Number').setStyle(TextInputStyle.Short)
+              .setRequired(false).setValue((profile.phoneNumber || '').substring(0, 100)).setPlaceholder('e.g. +1 234 567 890');
+            const dobInput = new TextInputBuilder()
+              .setCustomId('dob').setLabel('Date of Birth').setStyle(TextInputStyle.Short)
+              .setRequired(false).setValue((profile.dob || '').substring(0, 100)).setPlaceholder('e.g. YYYY-MM-DD');
+            modal.addComponents(new ActionRowBuilder().addComponents(phoneInput), new ActionRowBuilder().addComponents(dobInput));
             try {
-              await interaction.editReply({ content: `Added tutor ${tutorDisplay} to **${subj}**, access grant started.`, components: [] });
-            } catch (e) {
-              try { await interaction.followUp({ content: `Added tutor ${tutorDisplay} to **${subj}**, access grant started.` }); } catch (err) { console.warn('tutor_add_select subject reply failed', err); }
+              await interaction.showModal(modal);
+            } catch (err) {
+              try { await interaction.update({ content: `Added tutor <@${userid}> to **${subj}**, access grant started.`, components: [] }); } catch (e) { try { await interaction.reply({ content: `Added tutor <@${userid}> to **${subj}**, access grant started.`, ephemeral: true }); } catch (err2) { console.warn('tutor_add_select subject reply failed', err2); } }
             }
             return;
           }
@@ -2742,24 +2814,26 @@ client.on('interactionCreate', async (interaction) => {
             db.subjectTutors[subj] = db.subjectTutors[subj] || [];
             if (!db.subjectTutors[subj].includes(userid)) db.subjectTutors[subj].push(userid);
             db.tutorProfiles[userid] = db.tutorProfiles[userid] || { addedAt: Date.now(), students: [], reviews: [], rating: { count:0, avg:0 }, notes: '' };
-            saveDB();
-            try {
-              await interaction.deferUpdate();
-            } catch (e) {
-              try {
-                await interaction.update({ content: `Processing...`, components: [] });
-              } catch (err) {
-                return;
-              }
-            }
-            try { await grantTutorAccess(userid); } catch (e) { try { notifyStaffError(e, 'tutor_add_select grantTutorAccess', interaction); } catch (err) {} }
             delete db._tempTutorAdd[key];
-            const tutorUser = await client.users.fetch(userid).catch(() => null);
-            const tutorDisplay = tutorUser ? `**${tutorUser.username}** (<@${userid}>)` : `<@${userid}>`;
+            saveDB();
+            // Start grantTutorAccess in background before showing modal
+            (async () => { try { await grantTutorAccess(userid); } catch (e) { try { notifyStaffError(e, 'tutor_add_select grantTutorAccess', interaction); } catch (err) {} } })();
+            // Show phone/DOB modal as the response
+            const profile = db.tutorProfiles[userid];
+            const modal = new ModalBuilder()
+              .setCustomId(`tutor_add_info_modal|${userid}`)
+              .setTitle('New Tutor — Contact Info (Optional)');
+            const phoneInput = new TextInputBuilder()
+              .setCustomId('phone').setLabel('Phone Number').setStyle(TextInputStyle.Short)
+              .setRequired(false).setValue((profile.phoneNumber || '').substring(0, 100)).setPlaceholder('e.g. +1 234 567 890');
+            const dobInput = new TextInputBuilder()
+              .setCustomId('dob').setLabel('Date of Birth').setStyle(TextInputStyle.Short)
+              .setRequired(false).setValue((profile.dob || '').substring(0, 100)).setPlaceholder('e.g. YYYY-MM-DD');
+            modal.addComponents(new ActionRowBuilder().addComponents(phoneInput), new ActionRowBuilder().addComponents(dobInput));
             try {
-              await interaction.editReply({ content: `Added tutor ${tutorDisplay} to **${subj}**, access grant started.`, components: [] });
-            } catch (e) {
-              try { await interaction.followUp({ content: `Added tutor ${tutorDisplay} to **${subj}**, access grant started.` }); } catch (err) { console.warn('tutor_add_select tutor reply failed', err); }
+              await interaction.showModal(modal);
+            } catch (err) {
+              try { await interaction.update({ content: `Added tutor <@${userid}> to **${subj}**, access grant started.`, components: [] }); } catch (e) { try { await interaction.reply({ content: `Added tutor <@${userid}> to **${subj}**, access grant started.`, ephemeral: true }); } catch (err2) { console.warn('tutor_add_select tutor reply failed', err2); } }
             }
             return;
           }
@@ -3329,6 +3403,8 @@ if (cmd === 'close') {
           const rating = profile.rating && profile.rating.count ? `${(Number(profile.rating.avg) || 0).toFixed(2)} ⭐️ (${profile.rating.count})` : '(no ratings)';
           const studentList = (profile.students && profile.students.length) ? profile.students.join(', ') : '(none)';
           const notes = profile.notes || '(no notes)';
+          const phone = profile.phoneNumber || '(not set)';
+          const dob = profile.dob || '(not set)';
           const nameDisplay = displayName ? `**${displayName}** (<@${userid}> · \`${userTag}\`)` : `<@${userid}> · \`${userTag}\``;
           const lines = [
             `Tutor info for: ${nameDisplay} — ID: \`${userid}\``,
@@ -3338,6 +3414,8 @@ if (cmd === 'close') {
             `Subjects: ${subjects.length ? subjects.join(', ') : '(none)'}`,
             `Assigned students: ${studentList}`,
             `Rating: ${rating}`,
+            `Phone: ${phone}`,
+            `DOB: ${dob}`,
             `Notes: ${notes}`
           ];
           return interaction.reply({ content: lines.join('\n') }).catch(() => {});
@@ -3558,12 +3636,7 @@ if (cmd === 'close') {
           db.tutorProfiles[userid] = db.tutorProfiles[userid] || { addedAt: Date.now(), students: [], reviews: [], rating: { count:0, avg:0 }, notes: '' };
           saveDB();
 
-          try {
-            await interaction.reply({ content: `Added tutor ${tutorMentionFmt} to **${subj}**, access grant started.` });
-          } catch (err) {
-            try { await interaction.followUp({ content: `Added tutor ${tutorMentionFmt} to **${subj}**, access grant started.` }); } catch {}
-          }
-
+          // Start grantTutorAccess in background before showing modal
           (async () => {
             try {
               await grantTutorAccess(userid);
@@ -3573,6 +3646,25 @@ if (cmd === 'close') {
               try { notifyStaffError(e, 'grantTutorAccess async', interaction); } catch (err) {}
             }
           })();
+
+          // Show phone/DOB modal as the response to the slash command
+          const profile = db.tutorProfiles[userid];
+          const addModal = new ModalBuilder()
+            .setCustomId(`tutor_add_info_modal|${userid}`)
+            .setTitle('New Tutor — Contact Info (Optional)');
+          const phoneInput = new TextInputBuilder()
+            .setCustomId('phone').setLabel('Phone Number').setStyle(TextInputStyle.Short)
+            .setRequired(false).setValue((profile.phoneNumber || '').substring(0, 100)).setPlaceholder('e.g. +1 234 567 890');
+          const dobInput = new TextInputBuilder()
+            .setCustomId('dob').setLabel('Date of Birth').setStyle(TextInputStyle.Short)
+            .setRequired(false).setValue((profile.dob || '').substring(0, 100)).setPlaceholder('e.g. YYYY-MM-DD');
+          addModal.addComponents(new ActionRowBuilder().addComponents(phoneInput), new ActionRowBuilder().addComponents(dobInput));
+          try {
+            await interaction.showModal(addModal);
+          } catch (err) {
+            console.error('showModal failed for tutor add info', err);
+            try { await interaction.reply({ content: `Added tutor ${tutorMentionFmt} to **${subj}**, access grant started.` }); } catch (e) { try { await interaction.followUp({ content: `Added tutor ${tutorMentionFmt} to **${subj}**, access grant started.` }); } catch {} }
+          }
           return;
         }
 
@@ -3590,7 +3682,55 @@ if (cmd === 'close') {
         return interaction.reply({ content: 'Unknown action for tutor.', ephemeral: true }).catch(() => {});
       }
 
-// Replace the current /createad command handler (around line 920-950) with:
+      if (cmd === 'tutoredit') {
+        if (!isStaff(interaction.member)) return interaction.reply({ content: 'Only staff can edit tutor info.', ephemeral: true }).catch(() => {});
+        const userOpt = interaction.options.getUser('user', false);
+        const useridRaw = userOpt ? userOpt.id : null;
+
+        db.tutorProfiles = db.tutorProfiles || {};
+
+        if (!useridRaw) {
+          // Show a select menu to pick a tutor
+          const allTutorIds = Array.from(new Set(Object.values(db.subjectTutors || {}).flat()));
+          if (allTutorIds.length === 0) return interaction.reply({ content: 'No tutors in database.', ephemeral: true }).catch(() => {});
+          const options = [];
+          for (const tid of allTutorIds.slice(0, 25)) {
+            let label = `User ID: ${tid}`;
+            let desc = '';
+            try {
+              const m = await interaction.guild.members.fetch(tid).catch(() => null);
+              if (m) { label = m.user.username; desc = `(${m.user.tag})`; }
+              else { const u = await client.users.fetch(tid).catch(() => null); if (u) { label = u.username; desc = `(${u.tag})`; } }
+            } catch (e) {}
+            options.push({ label: label.substring(0, 100), value: String(tid).substring(0, 100), description: desc.substring(0, 50) });
+          }
+          const select = new StringSelectMenuBuilder().setCustomId('tutor_select|edit').setPlaceholder('Select a tutor to edit contact info').addOptions(options);
+          return interaction.reply({ content: 'Select a tutor to edit their phone number and date of birth:', components: [new ActionRowBuilder().addComponents(select)], ephemeral: true }).catch(() => {});
+        }
+
+        const userid = String(useridRaw);
+        db.tutorProfiles[userid] = db.tutorProfiles[userid] || { addedAt: Date.now(), students: [], reviews: [], rating: { count: 0, avg: 0 }, notes: '' };
+        const profile = db.tutorProfiles[userid];
+        const modal = new ModalBuilder()
+          .setCustomId(`tutor_edit_modal|${userid}`)
+          .setTitle('Edit Tutor Contact Info');
+        const phoneInput = new TextInputBuilder()
+          .setCustomId('phone').setLabel('Phone Number').setStyle(TextInputStyle.Short)
+          .setRequired(false).setValue((profile.phoneNumber || '').substring(0, 100)).setPlaceholder('e.g. +1 234 567 890');
+        const dobInput = new TextInputBuilder()
+          .setCustomId('dob').setLabel('Date of Birth').setStyle(TextInputStyle.Short)
+          .setRequired(false).setValue((profile.dob || '').substring(0, 100)).setPlaceholder('e.g. YYYY-MM-DD');
+        modal.addComponents(new ActionRowBuilder().addComponents(phoneInput), new ActionRowBuilder().addComponents(dobInput));
+        try {
+          await interaction.showModal(modal);
+        } catch (err) {
+          console.error('showModal failed for tutoredit', err);
+          return interaction.reply({ content: 'Could not open edit modal, try again.', ephemeral: true }).catch(() => {});
+        }
+        return;
+      }
+
+
 if (cmd === 'createad') {
     if (!isStaff(interaction.member)) return interaction.reply({ content: 'Only staff can create ads.', ephemeral: true }).catch(() => {});
 
