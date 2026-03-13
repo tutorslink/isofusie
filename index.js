@@ -1142,16 +1142,30 @@ client.on('interactionCreate', async (interaction) => {
 
       // Handle View Full Details button
       if (custom.startsWith('view_full_details|')) {
-        const subject = custom.split('|')[1];
+        // customId format:
+        //   new: view_full_details|<adCode>  (e.g. view_full_details|IG-1)
+        //   old: view_full_details|<subject> (legacy buttons before adCode migration)
+        const identifier = custom.slice('view_full_details|'.length);
         
-        // Find the ad message to get full details
+        // Find the ad: prefer lookup by adCode (new format), fall back to subject title (old format)
         let adData = null;
-        for (const [msgId, data] of Object.entries(db.createAds || {})) {
-          if (data.embed && data.embed.title === subject) {
-            adData = data;
-            break;
+        if (isAdCode(identifier)) {
+          // New format — fast lookup by adCode
+          for (const data of Object.values(db.createAds || {})) {
+            if (data.adCode === identifier) { adData = data; break; }
           }
         }
+        if (!adData) {
+          // Backward-compat: search by embed title (subject name); prefer entries with fullDetails
+          for (const data of Object.values(db.createAds || {})) {
+            if (data.embed && data.embed.title === identifier) {
+              if (!adData || (!adData.fullDetails && data.fullDetails)) adData = data;
+            }
+          }
+        }
+        
+        // Derive a display subject from whatever we found
+        const subject = (adData && adData.embed && adData.embed.title) || identifier;
         
         if (!adData || !adData.fullDetails) {
           return interaction.reply({ content: 'Could not find ad details. Please try again later.', ephemeral: true }).catch(() => {});
@@ -2009,10 +2023,11 @@ client.on('interactionCreate', async (interaction) => {
                 }
             }
 
-            // Build concise message for main embed (subject shown as embed title)
+            // Build concise message for main embed (subject shown as embed title).
+            // Level is intentionally omitted here because ads are categorised into their
+            // level-specific channels; it is still shown in "View Full Details".
             // Only include non-empty fields to avoid messy blank lines.
             let message = '';
-            if (subjectLevel) message += `**Level:** ${subjectLevel}\n`;
             if (price && price1on1) {
               message += `**Price (Group):** $${price}\n`;
               message += `**Price (1-on-1):** $${price1on1}\n`;
@@ -2052,7 +2067,7 @@ client.on('interactionCreate', async (interaction) => {
             }
 
             const row = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId(`view_full_details|${subject}`).setLabel('View Full Details').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId(`view_full_details|${adCode}`).setLabel('View Full Details').setStyle(ButtonStyle.Secondary),
                 new ButtonBuilder().setCustomId(`ad_enquire|${subject}`).setLabel('Talk to Tutors!').setStyle(ButtonStyle.Success)
             );
 
@@ -3035,9 +3050,9 @@ client.on('interactionCreate', async (interaction) => {
     
     if (tutorSubjects.length > 0) {
       const filteredSubjOptions = tutorSubjects.slice(0, 24).map(s => ({ 
-        label: s, 
-        value: s,
-        description: `Subject: ${s}` 
+        label: s.substring(0, 100), 
+        value: s.substring(0, 100),
+        description: `Subject: ${s}`.substring(0, 100)
       }));
       
       // Only include "Use ticket subject" if tutor teaches it
@@ -3272,11 +3287,13 @@ if (cmd === 'close') {
         }
       }
     } catch (e) {}
-    tutorOptions.push({ 
-      label: label.substring(0, 100), 
+    // description must be a non-empty string or omitted — never pass ''
+    const tutorOpt = { 
+      label: (label || `User ${tid}`).substring(0, 100), 
       value: String(tid).substring(0, 100),
-      description: description.substring(0, 50) 
-    });
+    };
+    if (description) tutorOpt.description = description.substring(0, 50);
+    tutorOptions.push(tutorOpt);
   }
   
   const tutorSelect = new StringSelectMenuBuilder()
@@ -3285,10 +3302,10 @@ if (cmd === 'close') {
     .addOptions(tutorOptions);
 
   // Subject select - will be updated dynamically when tutor is chosen
-  const subjOptions = db.subjects.slice(0, 24).map(s => ({ 
-    label: s, 
-    value: s,
-    description: `Subject: ${s}` 
+  const subjOptions = (db.subjects || []).slice(0, 24).map(s => ({ 
+    label: s.substring(0, 100), 
+    value: s.substring(0, 100),
+    description: `Subject: ${s}`.substring(0, 100)
   }));
   
   const subjectSelect = new StringSelectMenuBuilder()
@@ -3399,7 +3416,9 @@ if (cmd === 'close') {
               // Show ad code(s) for this tutor if available
               const tutorAdCodes = Object.values(db.createAds || {}).filter(a => a.tutorId === tid && a.adCode).map(a => a.adCode);
               if (tutorAdCodes.length) desc = `${tutorAdCodes.join(', ')}${desc ? ' · ' + desc : ''}`;
-              options.push({ label: label.substring(0,100), value: String(tid).substring(0,100), description: desc.substring(0,50) });
+              const infoOpt = { label: (label || `User ${tid}`).substring(0,100), value: String(tid).substring(0,100) };
+              if (desc) infoOpt.description = desc.substring(0,50);
+              options.push(infoOpt);
             }
             const select = new StringSelectMenuBuilder().setCustomId('tutor_select|info').setPlaceholder('Select a tutor to view info').addOptions(options);
             return interaction.reply({ content: 'Select a tutor to view info:', components: [new ActionRowBuilder().addComponents(select)], ephemeral: true }).catch(() => {});
@@ -3464,7 +3483,9 @@ if (cmd === 'close') {
                 if (m) { label = m.user.username; desc = `(${m.user.tag})`; }
                 else { const u = await client.users.fetch(tid).catch(() => null); if (u) { label = u.username; desc = `(${u.tag})`; } }
               } catch (e) {}
-              options.push({ label: label.substring(0,100), value: String(tid).substring(0,100), description: desc.substring(0,50) });
+              const notesOpt = { label: (label || `User ${tid}`).substring(0,100), value: String(tid).substring(0,100) };
+              if (desc) notesOpt.description = desc.substring(0,50);
+              options.push(notesOpt);
             }
             const select = new StringSelectMenuBuilder().setCustomId('tutor_select|notes').setPlaceholder('Select a tutor to edit notes').addOptions(options);
             return interaction.reply({ content: 'Select a tutor to edit notes:', components: [new ActionRowBuilder().addComponents(select)], ephemeral: true }).catch(() => {});
@@ -3559,7 +3580,9 @@ if (cmd === 'close') {
               let label = `User ID: ${tid}`;
               let desc = '';
               try { const m = await interaction.guild.members.fetch(tid).catch(() => null); if (m) { label = m.user.username; desc = `(${m.user.tag})`; } else { const u = await client.users.fetch(tid).catch(() => null); if (u) { label = u.username; desc = `(${u.tag})`; } } } catch (e) {}
-              tutorOptions.push({ label: label.substring(0,100), value: String(tid).substring(0,100), description: desc.substring(0,50) });
+              const rmTutorOpt = { label: (label || `User ${tid}`).substring(0,100), value: String(tid).substring(0,100) };
+              if (desc) rmTutorOpt.description = desc.substring(0,50);
+              tutorOptions.push(rmTutorOpt);
             }
             if (tutorOptions.length) {
               const tutorSelect = new StringSelectMenuBuilder().setCustomId('tutor_remove_select|tutor').setPlaceholder('Select tutor to remove').addOptions(tutorOptions);
@@ -3578,7 +3601,9 @@ if (cmd === 'close') {
             let label = `User ID: ${tid}`;
             let desc = '';
             try { const m = await interaction.guild.members.fetch(tid).catch(() => null); if (m) { label = m.user.username; desc = `(${m.user.tag})`; } else { const u = await client.users.fetch(tid).catch(() => null); if (u) { label = u.username; desc = `(${u.tag})`; } } } catch (e) {}
-            options.push({ label: label.substring(0,100), value: String(tid).substring(0,100), description: desc.substring(0,50) });
+            const rmOpt = { label: (label || `User ${tid}`).substring(0,100), value: String(tid).substring(0,100) };
+            if (desc) rmOpt.description = desc.substring(0,50);
+            options.push(rmOpt);
           }
           const select = new StringSelectMenuBuilder().setCustomId(`tutor_remove_select|tutor|${subj}`).setPlaceholder('Select tutor to remove from subject').addOptions(options);
           return interaction.reply({ content: `Select a tutor to remove from ${subj}:`, components: [new ActionRowBuilder().addComponents(select)], ephemeral: true }).catch(() => {});
@@ -3639,7 +3664,9 @@ if (cmd === 'close') {
               let label = `User ID: ${tid}`;
               let desc = '';
               try { const mm = await interaction.guild.members.fetch(tid).catch(() => null); if (mm) { label = mm.user.username; desc = `(${mm.user.tag})`; } else { const u = await client.users.fetch(tid).catch(() => null); if (u) { label = u.username; desc = `(${u.tag})`; } } } catch (e) {}
-              options.push({ label: label.substring(0,100), value: String(tid).substring(0,100), description: desc.substring(0,50) });
+              const rmKnownOpt = { label: (label || `User ${tid}`).substring(0,100), value: String(tid).substring(0,100) };
+              if (desc) rmKnownOpt.description = desc.substring(0,50);
+              options.push(rmKnownOpt);
             }
             if (options.length) {
               const tutorSelect = new StringSelectMenuBuilder().setCustomId('tutor_remove_select|tutor').setPlaceholder('Select tutor to remove').addOptions(options);
@@ -3730,7 +3757,9 @@ if (cmd === 'close') {
               if (m) { label = m.user.username; desc = `(${m.user.tag})`; }
               else { const u = await client.users.fetch(tid).catch(() => null); if (u) { label = u.username; desc = `(${u.tag})`; } }
             } catch (e) {}
-            options.push({ label: label.substring(0, 100), value: String(tid).substring(0, 100), description: desc.substring(0, 50) });
+            const opt = { label: (label || `User ${tid}`).substring(0, 100), value: String(tid).substring(0, 100) };
+            if (desc) opt.description = desc.substring(0, 50);
+            options.push(opt);
           }
           const select = new StringSelectMenuBuilder().setCustomId('tutor_select|edit').setPlaceholder('Select a tutor to edit contact info').addOptions(options);
           return interaction.reply({ content: 'Select a tutor to edit their phone number and date of birth:', components: [new ActionRowBuilder().addComponents(select)], ephemeral: true }).catch(() => {});
@@ -4349,7 +4378,7 @@ if (cmd === 'createad') {
             }
 
             const migrateRow = new ActionRowBuilder().addComponents(
-              new ButtonBuilder().setCustomId(`view_full_details|${subject}`).setLabel('View Full Details').setStyle(ButtonStyle.Secondary),
+              new ButtonBuilder().setCustomId(`view_full_details|${adData.adCode || subject}`).setLabel('View Full Details').setStyle(ButtonStyle.Secondary),
               new ButtonBuilder().setCustomId(`ad_enquire|${subject}`).setLabel('Talk to Tutors!').setStyle(ButtonStyle.Success)
             );
 
@@ -4558,6 +4587,8 @@ client.on('messageCreate', async (message) => {
 
             const content = `Please do not type anything else until staff approves your message, as the tutors will only be able to see your first message.`;
             await message.channel.send({ content, components: [row] }).catch(() => {});
+            // React ✅ so the student knows the message was received
+            message.react('✅').catch(() => {});
             return;
           }
 
@@ -4567,25 +4598,30 @@ client.on('messageCreate', async (message) => {
             echo += message.content && message.content.trim().length ? `> ${message.content}` : '> (no text)';
             if (attachments.length) echo += `\n\nAttachment(s): ${attachments.join(' ')}`;
             await message.channel.send({ content: echo }).catch(() => {});
+            message.react('✅').catch(() => {});
           } catch (e) {
+            message.react('❌').catch(() => {});
             console.warn('failed to echo student follow-up', e);
             try { notifyStaffError(e, 'messageCreate echo follow-up', message); } catch (err) {}
           }
         } else {
           // approved flow forwards to tutors thread
+          let forwarded = false;
           if (ticket.tutorThreadId) {
             try {
               const thread = await message.guild.channels.fetch(ticket.tutorThreadId).catch(() => null);
               if (thread && thread.isThread()) {
                 let content = `Student ${code} says: ${message.content || ''}`;
                 if (attachments.length) content += `\nAttachment(s): ${attachments.join(' ')}`;
-                await thread.send({ content }).catch(() => {});
+                await thread.send({ content });
+                forwarded = true;
               }
             } catch (e) {
               console.warn('forward fail', e);
               try { notifyStaffError(e, 'messageCreate forward to tutors thread', message); } catch (err) {}
             }
           }
+          message.react(forwarded ? '✅' : '❌').catch(() => {});
         }
       } else {
         // staff or other wrote in ticket
@@ -4620,6 +4656,7 @@ client.on('messageCreate', async (message) => {
               const files = [...message.attachments.values()].map(a => a.url);
               // Skip forwarding if there is nothing to send (no text and no attachments)
               if (!text && !files.length) return;
+              let forwarded = false;
               try {
                 const guild = message.guild;
                 const ticketChannel = await guild.channels.fetch(ticket.ticketChannelId).catch(() => null);
@@ -4634,15 +4671,17 @@ client.on('messageCreate', async (message) => {
                   }
                   const tutorLabel = `Tutor ${ticket.tutorMap[userIdStr]}`;
                   const forwardContent = text ? `Reply from ${tutorLabel}: ${text}` : `Reply from ${tutorLabel}:`;
-                  await ticketChannel.send({ content: forwardContent, ...(files.length ? { files } : {}) }).catch(() => {});
+                  await ticketChannel.send({ content: forwardContent, ...(files.length ? { files } : {}) });
                   ticket.messages = ticket.messages || [];
                   ticket.messages.push({ who: tutorLabel, tutorId: userIdStr, at: Date.now(), text });
                   saveDB();
+                  forwarded = true;
                 }
               } catch (e) {
                 console.warn('Failed to forward tutor message to student', e);
                 try { notifyStaffError(e, 'messageCreate bridge forward to student', message); } catch (err) {}
               }
+              message.react(forwarded ? '✅' : '❌').catch(() => {});
             } else {
               // = prefix — internal note, post a brief auto-deleting acknowledgment
               try {
