@@ -39,10 +39,10 @@ const {
 
 // Modmail purpose categories - maps purpose key to category ID
 const MODMAIL_PURPOSE_CATEGORIES = {
-  tutor_application: '1460567488634032200',
-  complaints_suggestions: '1460567621186621524',
-  customer_service: '1481293582634848318',
-  payment: '1481293527760633990'
+  tutor_application: '1482394413723553905',
+  complaints_suggestions: '1482394415283568680',
+  customer_service: '1482394439552077868',
+  payment: '1482394437895192780'
 };
 
 // Single-letter codes to append to ticket numbers (number stays the same)
@@ -63,7 +63,7 @@ const MODMAIL_PURPOSE_OPTIONS = [
 export default function initModmail({ client, db, saveDB, config = {}, notifyError = null }) {
   if (!client || !db || !saveDB) throw new Error('initModmail missing args');
 
-  const MODMAIL_CATEGORY_ID = config.MODMAIL_CATEGORY_ID ?? '1443291406612561983';
+  const MODMAIL_CATEGORY_ID = config.MODMAIL_CATEGORY_ID ?? '1482394406517477396';
   const MODMAIL_TRANSCRIPTS_CHANNEL_ID = config.MODMAIL_TRANSCRIPTS_CHANNEL_ID ?? ENV_MODMAIL_TRANSCRIPTS_CHANNEL_ID;
 
   const STALE_CHANNEL_MSG = 'Your support channel no longer exists (it may have been deleted by staff). Press **Close Ticket** below to clear this ticket so you can open a new one.';
