@@ -1977,8 +1977,10 @@ client.on('interactionCreate', async (interaction) => {
             let subjectLevel = '';
             let subjectCodes = '';
             if (subjectDetails) {
-                const levelMatch = subjectDetails.match(/Subject Level:\s*(.+?)(?:\n|$)/i);
-                const codesMatch = subjectDetails.match(/Subject codes?:\s*(.+?)(?:\n|$)/i);
+                // Use [ \t]* (not \s*) to avoid consuming newlines, which would cause the
+                // next field's label to be captured as this field's value when the field is empty.
+                const levelMatch = subjectDetails.match(/Subject Level:[ \t]*(.+?)(?:\n|$)/i);
+                const codesMatch = subjectDetails.match(/Subject codes?:[ \t]*(.+?)(?:\n|$)/i);
                 subjectLevel = levelMatch ? levelMatch[1].trim() : '';
                 subjectCodes = codesMatch ? codesMatch[1].trim() : '';
             }
@@ -1992,17 +1994,19 @@ client.on('interactionCreate', async (interaction) => {
             let price1on1 = '';
             let timezone = '';
             if (tutorDetails) {
-              const langMatch = tutorDetails.match(/Languages?:\s*(.+?)(?:\n|$)/i);
-              const typeMatch = tutorDetails.match(/Class Type:\s*(.+?)(?:\n|$)/i);
-              const durationMatch = tutorDetails.match(/Class Duration:\s*(.+?)(?:\n|$)/i);
-              const weekMatch = tutorDetails.match(/Classes(?:\/| per )week:\s*(.+?)(?:\n|$)/i);
-              const monthMatch = tutorDetails.match(/Classes(?:\/| per )month:\s*(.+?)(?:\n|$)/i);
+              // Use [ \t]* (not \s*) to avoid consuming newlines, which would cause the
+              // next field's label to be captured as this field's value when the field is empty.
+              const langMatch = tutorDetails.match(/Languages?:[ \t]*(.+?)(?:\n|$)/i);
+              const typeMatch = tutorDetails.match(/Class Type:[ \t]*(.+?)(?:\n|$)/i);
+              const durationMatch = tutorDetails.match(/Class Duration:[ \t]*(.+?)(?:\n|$)/i);
+              const weekMatch = tutorDetails.match(/Classes(?:\/| per )week:[ \t]*(.+?)(?:\n|$)/i);
+              const monthMatch = tutorDetails.match(/Classes(?:\/| per )month:[ \t]*(.+?)(?:\n|$)/i);
               // Specific matches for group and 1-on-1 prices
-              const priceGroupMatch = tutorDetails.match(/Price per Class[^:\n]*Group[^:\n]*:\s*(.+?)(?:\n|$)/i);
-              const price1on1Match = tutorDetails.match(/Price per Class[^:\n]*1[-\s–]on[-\s–]1[^:\n]*:\s*(.+?)(?:\n|$)/i);
+              const priceGroupMatch = tutorDetails.match(/Price per Class[^:\n]*Group[^:\n]*:[ \t]*(.+?)(?:\n|$)/i);
+              const price1on1Match = tutorDetails.match(/Price per Class[^:\n]*1[-\s–]on[-\s–]1[^:\n]*:[ \t]*(.+?)(?:\n|$)/i);
               // Backward-compat: generic "Price per Class" for ads without the Group/1-on-1 labels
-              const priceGenericMatch = (!priceGroupMatch && !price1on1Match) ? tutorDetails.match(/Price per Class[^:\n]*:\s*(.+?)(?:\n|$)/i) : null;
-              const tzMatch = tutorDetails.match(/Time zone:\s*(.+?)(?:\n|$)/i);
+              const priceGenericMatch = (!priceGroupMatch && !price1on1Match) ? tutorDetails.match(/Price per Class[^:\n]*:[ \t]*(.+?)(?:\n|$)/i) : null;
+              const tzMatch = tutorDetails.match(/Time zone:[ \t]*(.+?)(?:\n|$)/i);
               languages = langMatch ? langMatch[1].trim() : '';
               classType = typeMatch ? typeMatch[1].trim() : '';
               classDuration = durationMatch ? durationMatch[1].trim() : '';
@@ -2015,7 +2019,7 @@ client.on('interactionCreate', async (interaction) => {
               } else if (classesMonth) {
                 monthlySchedule = `${classesMonth} classes/month`;
               } else {
-                const scheduleMatch = tutorDetails.match(/Monthly Schedule:\s*(.+?)(?:\n|$)/i);
+                const scheduleMatch = tutorDetails.match(/Monthly Schedule:[ \t]*(.+?)(?:\n|$)/i);
                 monthlySchedule = scheduleMatch ? scheduleMatch[1].trim() : '';
               }
               price = priceGroupMatch ? priceGroupMatch[1].trim() : (priceGenericMatch ? priceGenericMatch[1].trim() : '');
@@ -2031,16 +2035,18 @@ client.on('interactionCreate', async (interaction) => {
             let roleMention = null;
             
             if (optionalFields) {
+                // Use [ \t]* (not \s*) to avoid consuming newlines; the s-flag + trim() still
+                // captures multi-line content while returning empty string for unfilled fields.
                 // Parse tutor message
-                const tutorMsgMatch = optionalFields.match(/Message from tutor:\s*(.+?)(?:\n|Student|Payment|Color|Role|$)/is);
+                const tutorMsgMatch = optionalFields.match(/Message from tutor:[ \t]*(.+?)(?:\n|Student|Payment|Color|Role|$)/is);
                 if (tutorMsgMatch) tutorMessage = tutorMsgMatch[1].trim();
                 
                 // Parse testimonials
-                const testMatch = optionalFields.match(/Student Testimonials?:\s*(.+?)(?:\n|Payment|Color|Role|$)/is);
+                const testMatch = optionalFields.match(/Student Testimonials?:[ \t]*(.+?)(?:\n|Payment|Color|Role|$)/is);
                 if (testMatch) testimonials = testMatch[1].trim();
                 
                 // Parse payment terms
-                const paymentMatch = optionalFields.match(/Payment Terms?:\s*(.+?)(?:\n|Color|Role|$)/is);
+                const paymentMatch = optionalFields.match(/Payment Terms?:[ \t]*(.+?)(?:\n|Color|Role|$)/is);
                 if (paymentMatch) paymentTerms = paymentMatch[1].trim();
                 
                 // Parse color
@@ -2079,17 +2085,21 @@ client.on('interactionCreate', async (interaction) => {
             // Generate a unique ad code (e.g. IG-1, AL-3) for this ad
             const adCode = generateAdCode(levelKey);
 
-            // Store full details for ephemeral message
+            // Store full details for ephemeral message.
+            // Non-optional text fields default to 'NA' when empty so the View Full Details
+            // display never shows blank or corrupted values.  Price fields stay as empty
+            // strings so the conditional pricing display logic (group vs 1-on-1 vs "Contact
+            // for pricing") continues to work correctly.
             const fullDetailsMessage = {
-              subjectLevel,
-              subjectCodes,
-              languages,
-              classType,
-              classDuration,
-              monthlySchedule,
+              subjectLevel: subjectLevel || 'NA',
+              subjectCodes: subjectCodes || 'NA',
+              languages: languages || 'NA',
+              classType: classType || 'NA',
+              classDuration: classDuration || 'NA',
+              monthlySchedule: monthlySchedule || 'NA',
               price,
               price1on1,
-              timezone,
+              timezone: timezone || 'NA',
               tutorMessage,
               testimonials,
               paymentTerms
@@ -3585,8 +3595,8 @@ if (cmd === 'close') {
             return interaction.reply({ content: `Tutors for ${subj}:\n${lines.join('\n')}`, ephemeral: true }).catch(() => {});
           } else {
             const lines = [];
-            for (const s of db.subjects) {
-              const ids = db.subjectTutors[s] || [];
+            for (const s of (db.subjects || [])) {
+              const ids = (db.subjectTutors || {})[s] || [];
               if (ids.length === 0) continue; // skip subjects with no tutors
               const formatted = [];
               for (const id of ids) {
